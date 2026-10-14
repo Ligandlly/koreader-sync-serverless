@@ -2,6 +2,20 @@ import type { DatabaseAdapter } from "../database/adapter";
 import { getStatisticsSnapshot, upsertStatisticsSnapshot } from "../db";
 import type { StatisticsBookRow, StatisticsPageStatRow, StatisticsSnapshot } from "../types";
 
+// Bumped whenever the summary shape or its computation changes, so cached summaries written
+// by an older build are treated as invalid and rebuilt from the raw snapshot on next read.
+export const STATISTICS_SUMMARY_VERSION = 2;
+
+// Reading start times originate from the client device clock, which can drift or reset.
+// A start time cannot truly be in the future, so anything beyond this skew is treated as a
+// bad clock reading and left out of the aggregates. Six hours tolerates ordinary drift while
+// still discarding the gross jumps that a dead battery or a wrong device clock produces.
+export const MAX_FUTURE_SKEW_SECONDS = 6 * 60 * 60;
+
+function isFutureStartTime(startTimeSeconds: number, nowMs: number): boolean {
+  return startTimeSeconds * 1000 > nowMs + MAX_FUTURE_SKEW_SECONDS * 1000;
+}
+
 export interface StatisticsBookSummary {
   md5: string;
   title: string;
@@ -18,7 +32,7 @@ export interface StatisticsBookSummary {
 }
 
 export interface StatisticsSummary {
-  version: 1;
+  version: typeof STATISTICS_SUMMARY_VERSION;
   daily: Record<string, number>;
   books: Record<string, StatisticsBookSummary>;
 }
@@ -103,12 +117,14 @@ export function parseSnapshotFromJson(value: string): StatisticsSnapshot | null 
 export function buildStatisticsSummary(snapshot: StatisticsSnapshot): StatisticsSummary {
   const daily: Record<string, number> = {};
   const books: Record<string, StatisticsBookSummary> = {};
+  const nowMs = Date.now();
   for (const book of snapshot.books ?? []) {
     const days: Record<string, Record<string, number>> = {};
     for (const stat of book.page_stat_data ?? []) {
       const startTime = Number(stat.start_time);
       const duration = Number(stat.duration);
       if (!Number.isFinite(startTime) || !Number.isFinite(duration) || duration <= 0) continue;
+      if (isFutureStartTime(startTime, nowMs)) continue;
       const d = new Date(startTime * 1000);
       const dateKey =
         d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -133,7 +149,7 @@ export function buildStatisticsSummary(snapshot: StatisticsSnapshot): Statistics
       days,
     };
   }
-  return { version: 1, daily, books };
+  return { version: STATISTICS_SUMMARY_VERSION, daily, books };
 }
 
 export function parseStatisticsSummary(value: string | null | undefined): StatisticsSummary | null {
@@ -142,7 +158,7 @@ export function parseStatisticsSummary(value: string | null | undefined): Statis
     const parsed = JSON.parse(value) as unknown;
     if (!parsed || typeof parsed !== "object") return null;
     const record = parsed as Record<string, unknown>;
-    if (record.version !== 1 || typeof record.daily !== "object" || typeof record.books !== "object") return null;
+    if (record.version !== STATISTICS_SUMMARY_VERSION || typeof record.daily !== "object" || typeof record.books !== "object") return null;
     return parsed as StatisticsSummary;
   } catch {
     return null;
@@ -420,11 +436,13 @@ export function computeBookTrajectory(book: StatisticsBookRow): BookTrajectoryDe
 
   const dailyMap: Record<string, { seconds: number; pages: Set<number> }> = {};
   const sessions: BookRecentReadingSession[] = [];
+  const nowMs = Date.now();
 
   for (const stat of pageStats) {
     const startTime = Number(stat.start_time);
     const duration = Number(stat.duration);
     if (!Number.isFinite(startTime) || !Number.isFinite(duration) || duration <= 0) continue;
+    if (isFutureStartTime(startTime, nowMs)) continue;
 
     const page = stat.page == null || !Number.isFinite(Number(stat.page)) ? null : Number(stat.page);
     const totalPages = Number(stat.total_pages) || Number(book.pages) || 0;

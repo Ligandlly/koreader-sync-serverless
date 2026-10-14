@@ -497,6 +497,8 @@ export function renderUserPage(locale: Locale): string {
     .cal-lv3 { fill: var(--cal-3); background: var(--cal-3); }
     .cal-lv4 { fill: var(--cal-4); background: var(--cal-4); }
     .cal-outside { opacity: .3; }
+    .cal-future { fill: transparent; stroke: var(--border); stroke-width: 1; }
+    .cal-future:hover { stroke: var(--border); }
     .cal-cell:hover { stroke: var(--text); stroke-width: 1; }
     .cal-legend { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-secondary); margin-top: 8px; justify-content: flex-start; }
     .cal-legend .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 2px; }
@@ -1491,6 +1493,8 @@ export function renderUserPage(locale: Locale): string {
         minMap[days[i].date] = days[i].minutes;
       }
 
+      var todayKey = formatDateKey(new Date());
+
       var maxMin = 0;
       for (var key in minMap) {
         if (minMap[key] > maxMin) maxMin = minMap[key];
@@ -1514,7 +1518,11 @@ export function renderUserPage(locale: Locale): string {
           var m = String(cur.getMonth() + 1).padStart(2, '0');
           var day = String(cur.getDate()).padStart(2, '0');
           var key = y + '-' + m + '-' + day;
-          week.push({ key: key, min: minMap[key] || 0, inYear: cur.getFullYear() === selectedYear });
+          var hasData = Object.prototype.hasOwnProperty.call(minMap, key);
+          // A cell counts as "future" only when it is after today and carries no recorded data.
+          // The second condition guards against the server's calendar being a day ahead of the
+          // browser's local date, which would otherwise blank out a day that really has minutes.
+          week.push({ key: key, min: minMap[key] || 0, inYear: cur.getFullYear() === selectedYear, isFuture: key > todayKey && !hasData });
           cur.setDate(cur.getDate() + 1);
         }
         weeks.push(week);
@@ -1551,7 +1559,7 @@ export function renderUserPage(locale: Locale): string {
           var x = col * (cellSize + gap) + 35;
           var y = row * (cellSize + gap) + 20;
           var lv = cell.min === 0 ? 0 : Math.min(4, Math.ceil((cell.min / maxMin) * 4));
-          var cls = 'cal-cell cal-lv' + lv;
+          var cls = 'cal-cell ' + (cell.isFuture ? 'cal-future' : 'cal-lv' + lv);
           if (!cell.inYear) cls += ' cal-outside';
           html += '<rect class="' + cls + '" width="' + cellSize + '" height="' + cellSize + '" x="' + x + '" y="' + y + '" data-date="' + cell.key + '" data-min="' + cell.min + '" />';
         }
@@ -1571,7 +1579,7 @@ export function renderUserPage(locale: Locale): string {
     function renderCalendarTooltip(e) {
       var el = document.getElementById('calTooltip');
       var target = e.target;
-      if (target.tagName !== 'rect' || !target.classList.contains('cal-cell') || target.classList.contains('cal-outside')) {
+      if (target.tagName !== 'rect' || !target.classList.contains('cal-cell') || target.classList.contains('cal-outside') || target.classList.contains('cal-future')) {
         el.classList.remove('visible');
         return;
       }

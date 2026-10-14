@@ -74,6 +74,12 @@ class MockD1Database {
     return new MockD1Statement(this, sql);
   }
 
+  // Test-only accessor so specs can assert on session persistence without faking SQL.
+  getSessionExpiry(tokenHash: string): number | null {
+    const session = this.sessions.find((s) => s.token_hash === tokenHash);
+    return session ? session.expires_at : null;
+  }
+
   private normalizeSql(sql: string): string {
     return sql.replace(/\s+/g, " ").trim().toLowerCase();
   }
@@ -249,13 +255,22 @@ class MockD1Database {
       return { meta: { changes: before - this.sessions.length } };
     }
 
+    if (q.startsWith("update sessions set expires_at = ? where token_hash = ?")) {
+      const expiresAt = Number(bound[0]);
+      const tokenHash = String(bound[1] ?? "");
+      const session = this.sessions.find((s) => s.token_hash === tokenHash);
+      if (!session) return { meta: { changes: 0 } };
+      session.expires_at = expiresAt;
+      return { meta: { changes: 1 } };
+    }
+
     if (q.includes("from sessions join users on users.id = sessions.user_id")) {
       const tokenHash = String(bound[0] ?? "");
       const session = this.sessions.find((s) => s.token_hash === tokenHash && s.expires_at > now);
       if (!session) return null;
       const user = this.users.find((u) => u.id === session.user_id);
       if (!user) return null;
-      return { id: user.id, username: user.username };
+      return { id: user.id, username: user.username, expires_at: session.expires_at };
     }
 
     if (q.includes("count(*) as total_records") && q.includes("from progress") && q.includes("where user_id = ?")) {
@@ -328,4 +343,20 @@ export function createMockEnv(options: MockDbOptions = {}): Env {
     SESSION_TTL_HOURS: "168",
     PBKDF2_ITERATIONS: "1000",
   };
+}
+
+// Test-only helpers to seed and inspect session rows without faking SQL in each spec.
+export async function seedSession(
+  env: Env,
+  userId: number,
+  tokenHash: string,
+  expiresAt: number
+): Promise<void> {
+  await env.DB.prepare("INSERT INTO sessions (user_id, token_hash, expires_at) VALUES (?, ?, ?)")
+    .bind(userId, tokenHash, expiresAt)
+    .run();
+}
+
+export function readSessionExpiry(env: Env, tokenHash: string): number | null {
+  return (env.DB as unknown as MockD1Database).getSessionExpiry(tokenHash);
 }

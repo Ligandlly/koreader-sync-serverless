@@ -7,6 +7,9 @@ mode = "smart"
 
 [vars]
 SESSION_TTL_HOURS = "168"
+# SESSION_RENEW_WINDOW_HOURS defaults to half of SESSION_TTL_HOURS. Set an explicit value to
+# renew only near expiry (fewer DB writes), or "0" to disable sliding-session renewal.
+# SESSION_RENEW_WINDOW_HOURS = "84"
 
 [[d1_databases]]
 binding = "DB"

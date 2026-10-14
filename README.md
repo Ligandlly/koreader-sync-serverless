@@ -185,6 +185,7 @@ The user dashboard includes an "Export / Import Data" section after login:
 Notes:
 - Auth is identical to other KOReader sync endpoints (`x-auth-user`, `x-auth-key`).
 - Server uses `md5` as cross-device identity key for merge.
+- `page_stat_data[].start_time` comes from the device clock. Entries more than 6 hours in the future are treated as a bad clock and left out of every reading statistic: daily totals, per-book days, streaks, hourly chart and trajectory. The raw snapshot is kept as-is so exports stay faithful.
 - Response format:
 
 ```json
@@ -289,6 +290,7 @@ REQUIRED environment variables:
 - `PASSWORD_PEPPER`: required strong secret for password/session hashing
 - `ADMIN_TOKEN`: required for admin web login
 - `SESSION_TTL_HOURS`: optional session lifetime in hours, default `168`
+- `SESSION_RENEW_WINDOW_HOURS`: optional sliding-session renewal window in hours, default is half of `SESSION_TTL_HOURS`. When an authenticated request arrives with at most this much lifetime left, the session is extended back to a full TTL. Set `0` to disable renewal, or the full TTL to renew on every request.
 Runtime / database selector:
 - `RUNTIME_TARGET`: `cloudflare` (default) or `node`; `vercel` is reserved but not implemented
 - `DB_DRIVER`: `d1` (default) or `sqlite`; `postgres` is reserved but not implemented

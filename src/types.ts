@@ -6,6 +6,7 @@ export interface Env {
   SQLITE_PATH?: string;
   DEBUG?: string;
   SESSION_TTL_HOURS?: string;
+  SESSION_RENEW_WINDOW_HOURS?: string;
   PBKDF2_ITERATIONS?: string;
   ADMIN_TOKEN?: string;
   ENABLE_USER_REGISTRATION?: string;
