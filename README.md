@@ -5,6 +5,8 @@
   <img src="https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white" />
 </p>
 
+> **Forked from** [Tokisaki-Galaxy/koreader-sync-serverless](https://github.com/Tokisaki-Galaxy/koreader-sync-serverless). This fork adds an Aliyun Function Compute deployment target (`src/fc/` + provisioning/deploy scripts) and fixes the KOReader registration/authentication flow so devices can sync.
+
 A KOReader sync service with decoupled runtime/data adapters, currently supporting:
 - **Aliyun Function Compute + NAS (SQLite)**
 - **Local production (Node + SQLite)**
