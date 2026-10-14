@@ -13,6 +13,18 @@ export function parseSessionTtlHours(env: Env): number {
   return Number.isFinite(value) && value > 0 ? value : 168;
 }
 
+// Sliding-session renewal window in hours. When an authenticated request arrives and the
+// session has at most this much lifetime left, the session is extended back to a full TTL.
+// Defaults to half the TTL, so an active session is renewed well before it lapses while the
+// number of expiry writes stays low (roughly one write per half-TTL of activity). Set 0 to
+// disable renewal entirely, or the full TTL to renew on every authenticated request.
+export function parseSessionRenewWindowHours(env: Env): number {
+  const raw = env.SESSION_RENEW_WINDOW_HOURS?.trim();
+  if (raw === undefined || raw === "") return parseSessionTtlHours(env) / 2;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : parseSessionTtlHours(env) / 2;
+}
+
 export function parsePbkdf2Iterations(env: Env): number {
   const value = Number(env.PBKDF2_ITERATIONS ?? DEFAULT_PBKDF2_ITERATIONS);
   if (!Number.isFinite(value) || !Number.isInteger(value)) {

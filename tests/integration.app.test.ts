@@ -3,7 +3,7 @@ import app from "../src/index";
 import { hashPassword, sha256 } from "../src/crypto";
 import { parsePbkdf2Iterations } from "../src/services/common";
 import { getStatisticsSnapshot, listAllProgressByUser, upsertStatisticsSnapshot } from "../src/db";
-import { createMockEnv } from "./helpers/mock-db";
+import { createMockEnv, readSessionExpiry, seedSession } from "./helpers/mock-db";
 import { getCookieHeaderFromResponse } from "./helpers/http";
 
 describe("worker integration", () => {
@@ -123,6 +123,138 @@ describe("worker integration", () => {
       env
     );
     expect(logoutRes.status).toBe(200);
+  });
+
+  it("renews a near-expiry session on an authenticated request", async () => {
+    const env = createMockEnv();
+    const md5Password = "5f4dcc3b5aa765d61d8327deb882cf99";
+    const hash = await hashPassword(
+      md5Password,
+      "renewuser",
+      env.PASSWORD_PEPPER,
+      parsePbkdf2Iterations(env)
+    );
+    await env.DB.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)").bind("renewuser", hash).run();
+
+    const token = "renew-token";
+    const tokenHash = await sha256(`${token}:${env.PASSWORD_PEPPER}`);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const shortExpiry = nowSeconds + 60; // inside the default 168h renewal window
+    await seedSession(env, 1, tokenHash, shortExpiry);
+
+    const meRes = await app.request("/web/me", { method: "GET", headers: { cookie: `ks_session=${token}` } }, env);
+    expect(meRes.status).toBe(200);
+    await expect(meRes.json()).resolves.toMatchObject({ username: "renewuser" });
+
+    const refreshed = readSessionExpiry(env, tokenHash);
+    expect(refreshed).not.toBeNull();
+    expect(refreshed!).toBeGreaterThan(shortExpiry);
+
+    // The renewed cookie is re-issued with a fresh max-age.
+    const setCookie = meRes.headers.get("set-cookie") ?? "";
+    expect(setCookie).toContain("ks_session=");
+    expect(setCookie).toContain(`Max-Age=${168 * 3600}`);
+
+    // The re-issued token still authenticates a follow-up request.
+    const followUp = await app.request("/web/me", { method: "GET", headers: { cookie: `ks_session=${token}` } }, env);
+    expect(followUp.status).toBe(200);
+  });
+
+  it("leaves a fresh session untouched under the default renewal window", async () => {
+    const env = createMockEnv();
+    const md5Password = "5f4dcc3b5aa765d61d8327deb882cf99";
+    const hash = await hashPassword(
+      md5Password,
+      "freshuser",
+      env.PASSWORD_PEPPER,
+      parsePbkdf2Iterations(env)
+    );
+    await env.DB.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)").bind("freshuser", hash).run();
+
+    const token = "fresh-token";
+    const tokenHash = await sha256(`${token}:${env.PASSWORD_PEPPER}`);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    // A brand-new full-TTL session sits well outside the default half-TTL renewal window.
+    const fullExpiry = nowSeconds + 168 * 3600;
+    await seedSession(env, 1, tokenHash, fullExpiry);
+
+    const meRes = await app.request("/web/me", { method: "GET", headers: { cookie: `ks_session=${token}` } }, env);
+    expect(meRes.status).toBe(200);
+    expect(readSessionExpiry(env, tokenHash)).toBe(fullExpiry);
+    expect(meRes.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("leaves a long-lived session untouched until it nears expiry", async () => {
+    const env = createMockEnv();
+    const md5Password = "5f4dcc3b5aa765d61d8327deb882cf99";
+    const hash = await hashPassword(
+      md5Password,
+      "steadyuser",
+      env.PASSWORD_PEPPER,
+      parsePbkdf2Iterations(env)
+    );
+    await env.DB.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)").bind("steadyuser", hash).run();
+
+    const token = "steady-token";
+    const tokenHash = await sha256(`${token}:${env.PASSWORD_PEPPER}`);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const farExpiry = nowSeconds + 30 * 24 * 3600; // 30 days out, well beyond the 7-day window
+    await seedSession(env, 1, tokenHash, farExpiry);
+
+    const meRes = await app.request("/web/me", { method: "GET", headers: { cookie: `ks_session=${token}` } }, env);
+    expect(meRes.status).toBe(200);
+    expect(readSessionExpiry(env, tokenHash)).toBe(farExpiry);
+  });
+
+  it("does not renew when the renewal window is disabled", async () => {
+    const env = createMockEnv();
+    env.SESSION_RENEW_WINDOW_HOURS = "0";
+    const md5Password = "5f4dcc3b5aa765d61d8327deb882cf99";
+    const hash = await hashPassword(
+      md5Password,
+      "staticuser",
+      env.PASSWORD_PEPPER,
+      parsePbkdf2Iterations(env)
+    );
+    await env.DB.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)").bind("staticuser", hash).run();
+
+    const token = "static-token";
+    const tokenHash = await sha256(`${token}:${env.PASSWORD_PEPPER}`);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const shortExpiry = nowSeconds + 60;
+    await seedSession(env, 1, tokenHash, shortExpiry);
+
+    const meRes = await app.request("/web/me", { method: "GET", headers: { cookie: `ks_session=${token}` } }, env);
+    expect(meRes.status).toBe(200);
+    expect(readSessionExpiry(env, tokenHash)).toBe(shortExpiry);
+    expect(meRes.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("renews only the session that was presented", async () => {
+    const env = createMockEnv();
+    const md5Password = "5f4dcc3b5aa765d61d8327deb882cf99";
+    const hash = await hashPassword(
+      md5Password,
+      "multiuser",
+      env.PASSWORD_PEPPER,
+      parsePbkdf2Iterations(env)
+    );
+    await env.DB.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)").bind("multiuser", hash).run();
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const activeToken = "active-token";
+    const otherToken = "other-token";
+    const activeHash = await sha256(`${activeToken}:${env.PASSWORD_PEPPER}`);
+    const otherHash = await sha256(`${otherToken}:${env.PASSWORD_PEPPER}`);
+    const shortExpiry = nowSeconds + 60;
+    const otherExpiry = nowSeconds + 30 * 24 * 3600;
+    await seedSession(env, 1, activeHash, shortExpiry);
+    await seedSession(env, 1, otherHash, otherExpiry);
+
+    const meRes = await app.request("/web/me", { method: "GET", headers: { cookie: `ks_session=${activeToken}` } }, env);
+    expect(meRes.status).toBe(200);
+    expect(readSessionExpiry(env, activeHash)).toBeGreaterThan(shortExpiry);
+    expect(readSessionExpiry(env, otherHash)).toBe(otherExpiry);
   });
 
   it("supports admin login and init-status checks", async () => {

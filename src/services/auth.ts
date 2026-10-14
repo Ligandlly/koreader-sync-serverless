@@ -1,7 +1,7 @@
-import { getCookie } from "hono/cookie";
-import { findUserByUsername, findWebUserBySessionTokenHash } from "../db";
+import { getCookie, setCookie } from "hono/cookie";
+import { findUserByUsername, findWebUserBySessionTokenHash, renewSession } from "../db";
 import { sha256, verifyPassword } from "../crypto";
-import { parsePbkdf2Iterations } from "./common";
+import { parsePbkdf2Iterations, parseSessionRenewWindowHours, parseSessionTtlHours } from "./common";
 import type { AppContext } from "../context";
 import type { DatabaseAdapter } from "../database/adapter";
 import { resolveDatabaseAdapter } from "../context";
@@ -55,11 +55,41 @@ export async function authWebUser(c: AppContextWithDb): Promise<{ userId: number
   const token = getCookie(c, USER_SESSION_COOKIE);
   if (!token) return null;
 
+  const db = resolveDb(c);
   const tokenHash = await sha256(`${token}:${c.env.PASSWORD_PEPPER}`);
-  const row = await findWebUserBySessionTokenHash(resolveDb(c), tokenHash);
+  const row = await findWebUserBySessionTokenHash(db, tokenHash);
 
   if (!row) return null;
+  await maybeRenewSession(c, db, token, tokenHash, row.expires_at);
   return { userId: row.id, username: row.username };
+}
+
+// Sliding session: extend the stored expiry and refresh the cookie when the session is close
+// to lapsing. Only writes when a renewal is actually due, so the common case stays read-only.
+async function maybeRenewSession(
+  c: AppContextWithDb,
+  db: DatabaseAdapter,
+  token: string,
+  tokenHash: string,
+  currentExpiresAt: number
+): Promise<void> {
+  const ttlHours = parseSessionTtlHours(c.env);
+  const windowHours = parseSessionRenewWindowHours(c.env);
+  if (windowHours <= 0) return;
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const threshold = nowSeconds + windowHours * 3600;
+  if (currentExpiresAt > threshold) return;
+
+  const nextExpiresAt = nowSeconds + ttlHours * 3600;
+  await renewSession(db, tokenHash, nextExpiresAt);
+  setCookie(c, USER_SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/",
+    maxAge: ttlHours * 3600,
+  });
 }
 
 export async function authAdmin(c: AppContext): Promise<{ mode: "token" } | null> {

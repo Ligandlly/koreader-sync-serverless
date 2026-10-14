@@ -21,6 +21,7 @@ function parseNodeEnv(): Env {
     SQLITE_PATH: process.env.SQLITE_PATH ?? "./data/koreader-sync.db",
     DEBUG: process.env.DEBUG,
     SESSION_TTL_HOURS: process.env.SESSION_TTL_HOURS,
+    SESSION_RENEW_WINDOW_HOURS: process.env.SESSION_RENEW_WINDOW_HOURS,
     PBKDF2_ITERATIONS: process.env.PBKDF2_ITERATIONS,
     ENABLE_USER_REGISTRATION: process.env.ENABLE_USER_REGISTRATION,
   };

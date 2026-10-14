@@ -290,19 +290,29 @@ export async function deleteSessionsByUserId(db: DatabaseAdapter, userId: number
   await db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run();
 }
 
+export async function renewSession(
+  db: DatabaseAdapter,
+  tokenHash: string,
+  expiresAt: number
+): Promise<void> {
+  await db.prepare("UPDATE sessions SET expires_at = ? WHERE token_hash = ?")
+    .bind(expiresAt, tokenHash)
+    .run();
+}
+
 export async function findWebUserBySessionTokenHash(
   db: DatabaseAdapter,
   tokenHash: string
-): Promise<{ id: number; username: string } | null> {
+): Promise<{ id: number; username: string; expires_at: number } | null> {
   const row = await db.prepare(
-    `SELECT users.id AS id, users.username AS username
+    `SELECT users.id AS id, users.username AS username, sessions.expires_at AS expires_at
      FROM sessions
      JOIN users ON users.id = sessions.user_id
      WHERE sessions.token_hash = ? AND sessions.expires_at > unixepoch()
      LIMIT 1`
   )
     .bind(tokenHash)
-    .first<{ id: number; username: string }>();
+    .first<{ id: number; username: string; expires_at: number }>();
   return row ?? null;
 }
 

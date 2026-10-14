@@ -4,6 +4,7 @@ import {
   isValidPassword,
   isValidUsername,
   parsePbkdf2Iterations,
+  parseSessionRenewWindowHours,
   parseSessionTtlHours,
   withSecurityHeaders,
 } from "../src/services/common";
@@ -21,6 +22,20 @@ describe("common service helpers", () => {
     expect(parseSessionTtlHours(env)).toBe(24);
     expect(parseSessionTtlHours({ SESSION_TTL_HOURS: "0" } as Env)).toBe(168);
     expect(parseSessionTtlHours({ SESSION_TTL_HOURS: "nope" } as Env)).toBe(168);
+  });
+
+  it("derives the renewal window from the ttl by default", () => {
+    expect(parseSessionRenewWindowHours({ SESSION_TTL_HOURS: "24" } as Env)).toBe(12);
+    expect(parseSessionRenewWindowHours({} as Env)).toBe(84);
+  });
+
+  it("honors an explicit renewal window and allows disabling it", () => {
+    expect(parseSessionRenewWindowHours({ SESSION_TTL_HOURS: "168", SESSION_RENEW_WINDOW_HOURS: "24" } as Env)).toBe(24);
+    expect(parseSessionRenewWindowHours({ SESSION_RENEW_WINDOW_HOURS: "0" } as Env)).toBe(0);
+    expect(parseSessionRenewWindowHours({ SESSION_TTL_HOURS: "72", SESSION_RENEW_WINDOW_HOURS: "" } as Env)).toBe(36);
+    expect(parseSessionRenewWindowHours({ SESSION_TTL_HOURS: "72", SESSION_RENEW_WINDOW_HOURS: "nope" } as Env)).toBe(36);
+    expect(parseSessionRenewWindowHours({ SESSION_TTL_HOURS: "72", SESSION_RENEW_WINDOW_HOURS: "  " } as Env)).toBe(36);
+    expect(parseSessionRenewWindowHours({ SESSION_TTL_HOURS: "72", SESSION_RENEW_WINDOW_HOURS: "-1" } as Env)).toBe(36);
   });
 
   it("parses pbkdf2 iterations with fallback", () => {
