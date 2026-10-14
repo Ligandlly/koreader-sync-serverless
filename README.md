@@ -185,6 +185,7 @@ The user dashboard includes an "Export / Import Data" section after login:
 Notes:
 - Auth is identical to other KOReader sync endpoints (`x-auth-user`, `x-auth-key`).
 - Server uses `md5` as cross-device identity key for merge.
+- `page_stat_data[].start_time` comes from the device clock. Entries more than 6 hours in the future are treated as a bad clock and left out of every reading statistic (daily totals, per-book days, streaks, hourly, trajectory). The raw snapshot is kept as-is so exports stay faithful.
 - Response format:
 
 ```json

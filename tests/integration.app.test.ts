@@ -3,6 +3,7 @@ import app from "../src/index";
 import { hashPassword, sha256 } from "../src/crypto";
 import { parsePbkdf2Iterations } from "../src/services/common";
 import { getStatisticsSnapshot, listAllProgressByUser, upsertStatisticsSnapshot } from "../src/db";
+import { STATISTICS_SUMMARY_VERSION } from "../src/services/statistics";
 import { createMockEnv, readSessionExpiry, seedSession } from "./helpers/mock-db";
 import { getCookieHeaderFromResponse } from "./helpers/http";
 
@@ -548,6 +549,86 @@ describe("worker integration", () => {
     await expect(detailOther.json()).resolves.toMatchObject({ totalMinutes: 0, books: {} });
   });
 
+  it("keeps future-dated device timestamps out of the calendar aggregates", async () => {
+    const env = createMockEnv();
+    const md5Password = "5f4dcc3b5aa765d61d8327deb882cf99";
+    const register = await app.request(
+      "/users/create",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "skewuser", password: "password" }),
+      },
+      env
+    );
+    expect(register.status).toBe(201);
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const past = nowSeconds - 3600;
+    const future = nowSeconds + 30 * 24 * 60 * 60; // clock jumped a month ahead
+
+    const putRes = await app.request(
+      "/syncs/statistics",
+      {
+        method: "PUT",
+        headers: {
+          "x-auth-user": "skewuser",
+          "x-auth-key": md5Password,
+          "content-type": "application/json",
+          "x-client-version": "y-anna-1.0",
+          "User-Agent": "Mozilla/DONTLIKE/ANYTHING",
+        },
+        body: JSON.stringify({
+          schema_version: 20221111,
+          device: "Kindle",
+          device_id: "k-1",
+          snapshot: {
+            books: [
+              {
+                md5: "abc",
+                title: "A",
+                authors: "X",
+                notes: 0,
+                last_open: past,
+                highlights: 0,
+                pages: 100,
+                series: "",
+                language: "en",
+                total_read_time: 10,
+                total_read_pages: 5,
+                page_stat_data: [
+                  { page: 1, start_time: past, duration: 120, total_pages: 100 },
+                  { page: 2, start_time: future, duration: 600, total_pages: 100 },
+                ],
+              },
+            ],
+          },
+        }),
+      },
+      env
+    );
+    expect(putRes.status).toBe(200);
+
+    const loginRes = await app.request(
+      "/web/auth/login",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "skewuser", password: "password" }),
+      },
+      env
+    );
+    const cookie = getCookieHeaderFromResponse(loginRes, "ks_session");
+
+    const calRes = await app.request("/web/stats/calendar", { headers: { cookie } }, env);
+    expect(calRes.status).toBe(200);
+    const calData = await calRes.json();
+    // Only the past session is counted; the future one is dropped.
+    expect(calData.days).toHaveLength(1);
+    expect(calData.days[0].minutes).toBe(2);
+    expect(calData.activeDays).toBe(1);
+  });
+
   it("lazy-backfills the statistics summary for legacy rows", async () => {
     const env = createMockEnv();
     const md5Password = "5f4dcc3b5aa765d61d8327deb882cf99";
@@ -626,7 +707,76 @@ describe("worker integration", () => {
 
     const stored = await getStatisticsSnapshot(env.DB, userId);
     expect(stored?.statistics_summary_json).not.toBeNull();
-    expect(JSON.parse(stored?.statistics_summary_json ?? "{}").version).toBe(1);
+    expect(JSON.parse(stored?.statistics_summary_json ?? "{}").version).toBe(STATISTICS_SUMMARY_VERSION);
+  });
+
+  it("rebuilds a stale cached summary that predates the current version", async () => {
+    const env = createMockEnv();
+    const md5Password = "5f4dcc3b5aa765d61d8327deb882cf99";
+    const register = await app.request(
+      "/users/create",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "staleuser", password: "password" }),
+      },
+      env
+    );
+    expect(register.status).toBe(201);
+
+    const loginRes = await app.request(
+      "/web/auth/login",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "staleuser", password: "password" }),
+      },
+      env
+    );
+    const cookie = getCookieHeaderFromResponse(loginRes, "ks_session");
+    const me = await (await app.request("/web/me", { headers: { cookie } }, env)).json();
+
+    const base = new Date(2024, 0, 5, 10, 30, 0);
+    const t1 = Math.floor(base.getTime() / 1000);
+    const snapshot = {
+      books: [
+        {
+          md5: "stale",
+          title: "Stale Book",
+          authors: "",
+          notes: 0,
+          last_open: t1,
+          highlights: 0,
+          pages: 100,
+          series: "",
+          language: "en",
+          total_read_time: 30,
+          total_read_pages: 10,
+          page_stat_data: [{ page: 1, start_time: t1, duration: 120, total_pages: 100 }],
+        },
+      ],
+    };
+    // Seed a summary written by an older build: correct shape, obsolete version, empty body.
+    await upsertStatisticsSnapshot(
+      env.DB,
+      me.id,
+      20221111,
+      "Kindle",
+      "k-1",
+      JSON.stringify(snapshot),
+      JSON.stringify({ version: 1, daily: {}, books: {} })
+    );
+
+    const calRes = await app.request("/web/stats/calendar", { headers: { cookie } }, env);
+    expect(calRes.status).toBe(200);
+    // The stale empty summary must be rejected and rebuilt from the raw snapshot.
+    await expect(calRes.json()).resolves.toMatchObject({
+      years: [2024],
+      days: [{ date: "2024-01-05", minutes: 2 }],
+    });
+
+    const stored = await getStatisticsSnapshot(env.DB, me.id);
+    expect(JSON.parse(stored?.statistics_summary_json ?? "{}").version).toBe(STATISTICS_SUMMARY_VERSION);
   });
 
   describe("user data export/import", () => {

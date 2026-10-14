@@ -5,6 +5,8 @@ import {
   computeHourlyDistribution,
   computeReadingStreaks,
   parseStatisticsSummary,
+  MAX_FUTURE_SKEW_SECONDS,
+  STATISTICS_SUMMARY_VERSION,
   type StatisticsSummary,
 } from "../src/services/statistics";
 import type { StatisticsSnapshot } from "../src/types";
@@ -79,6 +81,55 @@ describe("buildStatisticsSummary", () => {
     expect(Object.keys(summary.books.abc.days)).toHaveLength(0);
   });
 
+  it("excludes reading entries whose start time is implausibly in the future", () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const withinSkew = nowSeconds + 60 * 60; // 1 hour ahead: tolerated device drift
+    const beyondSkew = nowSeconds + 48 * 60 * 60; // 2 days ahead: a bad device clock
+
+    const snapshot = snapshotWithPageStats([
+      {
+        md5: "abc",
+        page_stat_data: [
+          { start_time: nowSeconds - 3600, duration: 120 },
+          { start_time: withinSkew, duration: 60 },
+          { start_time: beyondSkew, duration: 600 },
+        ],
+      },
+    ]);
+
+    const summary = buildStatisticsSummary(snapshot);
+    const total = Object.values(summary.daily).reduce((sum, mins) => sum + mins, 0);
+    // Only the past entry (2 min) and the tolerated near-future entry (1 min) survive.
+    expect(total).toBe(3);
+    const futureKey = new Date(beyondSkew * 1000);
+    const futureDateKey =
+      futureKey.getFullYear() + '-' + String(futureKey.getMonth() + 1).padStart(2, '0') + '-' + String(futureKey.getDate()).padStart(2, '0');
+    expect(summary.daily[futureDateKey]).toBeUndefined();
+    expect(summary.books.abc.days[futureDateKey]).toBeUndefined();
+  });
+
+  it("keeps entries exactly at the skew boundary and drops those past it", () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    // Pin the boundary to the documented constant rather than a magic offset.
+    const atBoundary = Math.floor((Date.now() + MAX_FUTURE_SKEW_SECONDS * 1000) / 1000) - 1;
+    const pastBoundary = Math.floor((Date.now() + MAX_FUTURE_SKEW_SECONDS * 1000) / 1000) + 60;
+
+    const snapshot = snapshotWithPageStats([
+      {
+        md5: "abc",
+        page_stat_data: [
+          { start_time: atBoundary, duration: 60 },
+          { start_time: pastBoundary, duration: 600 },
+        ],
+      },
+    ]);
+
+    const summary = buildStatisticsSummary(snapshot);
+    const total = Object.values(summary.daily).reduce((sum, mins) => sum + mins, 0);
+    // Only the boundary entry (1 min) is retained.
+    expect(total).toBe(1);
+  });
+
   it("carries book metadata into the summary", () => {
     const snapshot: StatisticsSnapshot = {
       books: [
@@ -125,7 +176,9 @@ describe("parseStatisticsSummary", () => {
     expect(parseStatisticsSummary(undefined)).toBeNull();
     expect(parseStatisticsSummary("")).toBeNull();
     expect(parseStatisticsSummary("{bad json")).toBeNull();
-    expect(parseStatisticsSummary(JSON.stringify({ version: 2, daily: {}, books: {} }))).toBeNull();
+    expect(parseStatisticsSummary(JSON.stringify({ version: 1, daily: {}, books: {} }))).toBeNull();
+    expect(parseStatisticsSummary(JSON.stringify({ version: 999, daily: {}, books: {} }))).toBeNull();
+    expect(parseStatisticsSummary(JSON.stringify({ version: STATISTICS_SUMMARY_VERSION, daily: {}, books: {} }))).not.toBeNull();
   });
 });
 
@@ -176,7 +229,7 @@ describe("computeReadingStreaks", () => {
 describe("computeHourlyDistribution", () => {
   it("aggregates reading duration by 24 hours across books", () => {
     const summary: StatisticsSummary = {
-      version: 1,
+      version: STATISTICS_SUMMARY_VERSION,
       daily: {
         "2026-03-29": { total_time: 15, total_pages: 5, books_count: 1 },
         "2026-03-30": { total_time: 30, total_pages: 10, books_count: 2 },
@@ -228,7 +281,7 @@ describe("computeHourlyDistribution", () => {
 
   it("applies positive and negative timezone offsets correctly", () => {
     const summary: StatisticsSummary = {
-      version: 1,
+      version: STATISTICS_SUMMARY_VERSION,
       daily: {},
       books: {
         b1: {
@@ -300,6 +353,32 @@ describe("computeBookTrajectory", () => {
     expect(trajectory.dailyHistory).toBe(trajectory.daily_history);
     expect(trajectory.recentSessions).toBe(trajectory.recent_sessions);
     expect(trajectory.readingSpeed).toBe(trajectory.reading_speed);
+  });
+
+  it("drops future-dated sessions from the trajectory", () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const future = nowSeconds + 30 * 24 * 60 * 60;
+    const trajectory = computeBookTrajectory({
+      md5: "future-md5",
+      title: "Future Book",
+      authors: "",
+      series: "",
+      language: "en",
+      notes: 0,
+      highlights: 0,
+      pages: 100,
+      total_read_pages: 1,
+      total_read_time: 60,
+      last_open: future,
+      page_stat_data: [
+        { page: 1, start_time: nowSeconds - 3600, duration: 600, total_pages: 100 },
+        { page: 2, start_time: future, duration: 600, total_pages: 100 },
+      ],
+    });
+
+    expect(trajectory.recent_sessions).toHaveLength(1);
+    expect(trajectory.recent_sessions[0].start_time).toBe(nowSeconds - 3600);
+    expect(trajectory.daily_history).toHaveLength(1);
   });
 
   it("handles empty or missing page_stat_data gracefully", () => {
