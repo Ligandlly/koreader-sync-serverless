@@ -1,14 +1,11 @@
 # KOReader Sync
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Cloudflare-Workers-F38020?style=for-the-badge&logo=Cloudflare&logoColor=white" />
-  <img src="https://img.shields.io/badge/Cloudflare-D1-F38020?style=for-the-badge&logo=Cloudflare&logoColor=white" />
   <img src="https://img.shields.io/badge/Alibaba_Cloud-Function_Compute-FF6A00?style=for-the-badge&logo=alibabacloud&logoColor=white" />
   <img src="https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white" />
 </p>
 
 A KOReader sync service with decoupled runtime/data adapters, currently supporting:
-- **Cloudflare Worker + D1**
 - **Aliyun Function Compute + NAS (SQLite)**
 - **Local production (Node + SQLite)**
 
@@ -20,59 +17,20 @@ Includes:
 ![User Web UI 1](https://github.com/user-attachments/assets/f38570a1-4421-42bc-a524-2e624cab1ca5)
 ![User Web UI 2](https://github.com/user-attachments/assets/cea579c4-ee79-4db4-a173-e190855b033a)
 
-
-You can also check out [this site](https://ksync.api.tski.uk/) (Cloudflare Worker + D1) to see how it works.
-
 ## How to use
 
-For example, I use public server at `https://ksync.api.tski.uk/`.
+Point the plugin and the web dashboard at your own deployed server URL.
 
 1. Download and install [this repo](https://github.com/Tokisaki-Galaxy/koreader-kosync2.kolpugin) to your KOReader device
-2. Click the settings icon and configure the plugin, set the server URL to `https://ksync.api.tski.uk/`.
+2. Click the settings icon and configure the plugin, set the server URL to your deployment URL.
 3. Click the register button to create a new account, or log in with your existing credentials.
-4. If you want to use the web dashboard, visit `https://ksync.api.tski.uk/` in your browser and log in with your KOReader credentials.
+4. If you want to use the web dashboard, visit the server URL in your browser and log in with your KOReader credentials.
 
 ## Deployment
 
-### Cloudflare: web
-
-Click the button below to deploy your own instance of KOReader Sync directly to Cloudflare Workers:
-
-[![deploy](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/tokisaki-galaxy/koreader-sync-serverless)
-
-- Configure Secrets: Once deployed successfully, go to your Cloudflare Worker dashboard -> Settings -> Variables.
-Add Secrets: Add `PASSWORD_PEPPER` and `ADMIN_TOKEN` as encrypted secrets.
-
-- Redeploy: Trigger a redeploy for the secrets to take effect.
-
-- Initialize Database: Visit your Worker URL at /admin, log in with your ADMIN_TOKEN, and click the Initialize Database button to create the required tables.
-
-### Cloudflare: CLI
-
-1. Set production secrets:
-
-```bash
-npx wrangler secret put PASSWORD_PEPPER
-npx wrangler secret put ADMIN_TOKEN
-```
-
-2. Apply remote migrations:
-
-```bash
-npx wrangler d1 migrations apply koreader-sync-db --remote
-```
-
-> If migrations are skipped, admins can initialize required tables from `/admin` after login.
-
-3. Deploy Worker:
-
-```bash
-npm run deploy
-```
-
 ### Docker (Production-like Local Runtime)
 
-Docker now runs the **Node local-production runtime** (not `wrangler dev`):
+Docker runs the **Node local-production runtime**:
 
 1. Build image:
 
@@ -209,14 +167,12 @@ front of the FC URL that strips the `Content-Disposition` header.
 ## Architecture
 
 - Runtime targets:
-  - `cloudflare` (implemented)
   - `node` (implemented for local production)
   - `vercel` (reserved interface, not implemented yet)
   - Aliyun Function Compute 3.0 (implemented via `src/fc/`, built on the `node`
     runtime target, `nodejs20` runtime with sql.js on NAS)
 - Database drivers:
-  - `d1` (Cloudflare runtime)
-  - `sqlite` (Node runtime)
+  - `sqlite` (implemented)
   - `postgres` (reserved interface, not implemented yet)
 - Web UIs served directly by the app:
   - `/`: user dashboard
@@ -257,7 +213,7 @@ front of the FC URL that strips the `Content-Disposition` header.
 
 The user dashboard includes an "Export / Import Data" section after login:
 
-- **Export** downloads two real SQLite files, generated **client-side** (via `sql.js` served from the service at `/assets/sql-wasm.js` + `/assets/sql-wasm.wasm`, embedded as base64 constants so no external CDN or build-time module rules are needed, and the Worker stays within the free-tier CPU budget):
+- **Export** downloads two real SQLite files, generated **client-side** (via `sql.js` served from the service at `/assets/sql-wasm.js` + `/assets/sql-wasm.wasm`, embedded as base64 constants so no external CDN or build-time module rules are needed, and the server stays within the free-tier CPU budget):
   - `statistics.sqlite3` — official KOReader reading-statistics schema (`book` + `page_stat_data` + `page_stat` view, `PRAGMA user_version=20221111`), readable directly by KOReader devices/tools.
   - `progress.db` — custom progress schema (`users` + `progress`). Note: official KOReader stores progress per-book in `.sdr/metadata.lua` (not a database), so there is no official progress DB format to match; this is our defined backup format.
 - **Import** restores either file type (auto-detected by its tables) into the current user's account, merging with existing data (statistics are merged by book `md5`).
@@ -327,44 +283,7 @@ Notes:
 - `PUT /admin/users/:id/password` force reset user password
 - `GET /admin` admin dashboard page
 
-## Local Development
-
-1. Install dependencies:
-
-```bash
-npm install
-```
-
-2. Configure local vars:
-
-```bash
-cp .dev.vars.example .dev.vars
-# Update PASSWORD_PEPPER with a strong random value
-# Set ADMIN_TOKEN for admin console login
-```
-
-3. Create D1 database and update `wrangler.toml`:
-
-```bash
-npx wrangler d1 create koreader-sync-db
-# Put returned database_id into wrangler.toml
-```
-
-4. Apply migrations:
-
-```bash
-npx wrangler d1 migrations apply koreader-sync-db --local
-```
-
-> You can also login to `/admin` first and use the “Initialize database” button when required tables are missing.
-
-5. Start dev server:
-
-```bash
-npm run dev
-```
-
-## Local Production (Node + SQLite)
+## Local (Node + SQLite)
 
 1. Install dependencies:
 
@@ -399,8 +318,6 @@ npm run start:local-prod
 
 | Script | Description |
 | --- | --- |
-| `npm run dev` | Run the Cloudflare Worker dev server (`wrangler dev`) |
-| `npm run deploy` | Deploy to Cloudflare Workers (`wrangler deploy`) |
 | `npm run start:local-prod` | Run the local Node + SQLite runtime |
 | `npm run typecheck` / `npm run check` | TypeScript type check |
 | `npm test` | Run the test suite (vitest) |
@@ -423,10 +340,10 @@ REQUIRED environment variables:
 - `ADMIN_TOKEN`: required for admin web login
 - `SESSION_TTL_HOURS`: optional session lifetime in hours, default `168`
 - `SESSION_RENEW_WINDOW_HOURS`: optional sliding-session renewal window in hours, default is half of `SESSION_TTL_HOURS`. When an authenticated request arrives with at most this much lifetime left, the session is extended back to a full TTL. Set `0` to disable renewal, or the full TTL to renew on every request.
-Runtime / database selector:
-- `RUNTIME_TARGET`: `cloudflare` (default) or `node`; `vercel` is reserved but not implemented. Aliyun Function Compute uses the `node` target through `src/fc/`.
-- `DB_DRIVER`: `d1` (default) or `sqlite`; `postgres` is reserved but not implemented
-- `SQLITE_PATH`: sqlite db path for `RUNTIME_TARGET=node` + `DB_DRIVER=sqlite` (on Aliyun FC this points at the NAS mount, e.g. `/mnt/data/koreader-sync.db`)
+Runtime / database selector (set these for the Node / Aliyun deployments):
+- `RUNTIME_TARGET`: `node` (Aliyun Function Compute uses the `node` target through `src/fc/`)
+- `DB_DRIVER`: `sqlite`
+- `SQLITE_PATH`: SQLite database path (on Aliyun FC this points at the NAS mount, e.g. `/mnt/data/koreader-sync.db`)
 OPTIONAL environment variables:
 - `DEBUG`: optional (`"1"`/`"true"` enables debug error logs)
 - `PBKDF2_ITERATIONS`: optional number of iterations for PBKDF2 hashing, default `20000` (adjust based on your performance/security needs)
