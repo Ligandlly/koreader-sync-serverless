@@ -1,4 +1,5 @@
 import { getCookie, setCookie } from "hono/cookie";
+import { md5 } from "js-md5";
 import { findUserByUsername, findWebUserBySessionTokenHash, renewSession } from "../db";
 import { sha256, verifyPassword } from "../crypto";
 import { parsePbkdf2Iterations, parseSessionRenewWindowHours, parseSessionTtlHours } from "./common";
@@ -46,7 +47,14 @@ export async function authKoreader(c: AppContextWithDb): Promise<{ userId: numbe
   if (!user) return null;
 
   const iterations = parsePbkdf2Iterations(c.env);
-  const ok = await verifyPassword(password, user.username, c.env.PASSWORD_PEPPER, user.password_hash, iterations);
+  let ok = await verifyPassword(password, user.username, c.env.PASSWORD_PEPPER, user.password_hash, iterations);
+  if (!ok) {
+    // Compatibility shim for accounts created by older builds: the register
+    // endpoint used to hash `md5(password)` even though KOReader already sends
+    // `md5(plain)` as the password, so those rows stored hash(md5(md5(plain))).
+    // Retry once against md5(key) so the affected devices can still sign in.
+    ok = await verifyPassword(md5(password), user.username, c.env.PASSWORD_PEPPER, user.password_hash, iterations);
+  }
   if (!ok) return null;
   return { userId: user.id, username: user.username };
 }

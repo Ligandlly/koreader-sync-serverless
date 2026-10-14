@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { md5 } from "js-md5";
 import app from "../src/index";
 import { hashPassword, sha256 } from "../src/crypto";
 import { parsePbkdf2Iterations } from "../src/services/common";
@@ -64,6 +65,64 @@ describe("worker integration", () => {
     expect(payload.document).toBe("book-1");
     expect(payload.progress).toBe("page:10");
     expect(payload.device_id).toBe("device-a");
+  });
+
+  it("registers with the KOReader md5 key and can sync immediately", async () => {
+    const env = createMockEnv();
+    const key = "5f4dcc3b5aa765d61d8327deb882cf99"; // md5("password")
+
+    const registerRes = await app.request(
+      "/users/create",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "devuser", password: key }),
+      },
+      env
+    );
+    expect(registerRes.status).toBe(201);
+
+    const authRes = await app.request(
+      "/users/auth",
+      { headers: { "x-auth-user": "devuser", "x-auth-key": key } },
+      env
+    );
+    expect(authRes.status).toBe(200);
+    await expect(authRes.json()).resolves.toEqual({ authorized: "OK" });
+
+    const putRes = await app.request(
+      "/syncs/progress",
+      {
+        method: "PUT",
+        headers: { "x-auth-user": "devuser", "x-auth-key": key, "content-type": "application/json" },
+        body: JSON.stringify({
+          document: "book-dev",
+          progress: "page:1",
+          percentage: 5,
+          device: "kobo",
+          device_id: "device-dev",
+        }),
+      },
+      env
+    );
+    expect(putRes.status).toBe(200);
+  });
+
+  it("still authenticates accounts stored with the legacy double-hash", async () => {
+    const env = createMockEnv();
+    const key = "5f4dcc3b5aa765d61d8327deb882cf99"; // md5("password")
+    // Old builds stored hash(md5(md5(plain))) because register re-hashed the key.
+    const legacyHash = await hashPassword(md5(key), "legacydev", env.PASSWORD_PEPPER, parsePbkdf2Iterations(env));
+    await env.DB.prepare("INSERT INTO users (username, password_hash) VALUES (?, ?)")
+      .bind("legacydev", legacyHash)
+      .run();
+
+    const authRes = await app.request(
+      "/users/auth",
+      { headers: { "x-auth-user": "legacydev", "x-auth-key": key } },
+      env
+    );
+    expect(authRes.status).toBe(200);
   });
 
   it("returns document-only payload when progress does not exist", async () => {

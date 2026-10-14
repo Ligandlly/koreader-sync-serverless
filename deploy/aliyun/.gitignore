@@ -1,0 +1,6 @@
+# Real deployment config must never be committed: it contains the generated
+# secrets and the account-specific VPC/NAS resource ids and mount target.
+# The tracked template is .env.example.
+.env
+.env.*
+!.env.example

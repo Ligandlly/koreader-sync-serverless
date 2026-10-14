@@ -27,6 +27,11 @@ const UNAUTHORIZED_MESSAGE = "Unauthorized";
 const REGISTRATION_DISABLED_MESSAGE = "User registration is disabled.";
 const INVALID_SNAPSHOT_MESSAGE = "Invalid statistics snapshot payload";
 
+// KOReader registers with the same value it later sends as `x-auth-key`, i.e.
+// `md5(plain_password)`. Other callers (web/admin flows, scripts) send the plain
+// password instead. Accept both and normalize to the md5 key before hashing.
+const MD5_HEX_RE = /^[0-9a-f]{32}$/;
+
 function logError(c: any, label: string, error: unknown) {
   const isDebug = c.env.DEBUG === "1" || c.env.DEBUG === "true";
   if (isDebug) {
@@ -63,7 +68,8 @@ router.post("/users/create", async (c) => {
 
   try {
     const iterations = parsePbkdf2Iterations(c.env);
-    const passwordHash = await hashPassword(md5(password), username, c.env.PASSWORD_PEPPER, iterations);
+    const koreaderKey = MD5_HEX_RE.test(password) ? password : md5(password);
+    const passwordHash = await hashPassword(koreaderKey, username, c.env.PASSWORD_PEPPER, iterations);
     await createUser(c.get("db"), username, passwordHash);
     return c.json({ username }, 201);
   } catch (error: any) {

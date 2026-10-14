@@ -53,7 +53,12 @@ router.post("/web/auth/login", async (c) => {
 
   const md5HashedPassword = md5(password);
   const iterations = parsePbkdf2Iterations(c.env);
-  const ok = await verifyPassword(md5HashedPassword, user.username, c.env.PASSWORD_PEPPER, user.password_hash, iterations);
+  let ok = await verifyPassword(md5HashedPassword, user.username, c.env.PASSWORD_PEPPER, user.password_hash, iterations);
+  if (!ok) {
+    // Legacy compatibility: accounts created before the register fix stored
+    // hash(md5(md5(plain))). Retry once against the double-hashed form.
+    ok = await verifyPassword(md5(md5HashedPassword), user.username, c.env.PASSWORD_PEPPER, user.password_hash, iterations);
+  }
   if (!ok) return c.json({ error: "Invalid credentials" }, 401);
 
   const token = generateSessionToken();

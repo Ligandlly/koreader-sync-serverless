@@ -10,3 +10,7 @@ server.js
 squashfs-root/
 src/**/*.js
 tsconfig.tsbuildinfo
+
+# Aliyun Function Compute deployment
+dist-fc/
+deploy/aliyun/.env

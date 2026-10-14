@@ -7,6 +7,10 @@
     "dev": "wrangler dev",
     "start:local-prod": "tsx src/node/server.ts",
     "deploy": "wrangler deploy",
+    "build:aliyun": "node scripts/build-fc.mjs",
+    "provision:aliyun": "bash scripts/provision-aliyun.sh",
+    "deploy:aliyun": "bash scripts/deploy-aliyun.sh",
+    "users": "bash scripts/list-users.sh",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck",
     "test": "vitest run"
@@ -20,6 +24,7 @@
     "@cloudflare/workers-types": "^4.20260301.0",
     "@types/node": "^24.3.1",
     "@types/sql.js": "^1.4.11",
+    "esbuild": "^0.27.3",
     "sql.js": "^1.14.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.2",
